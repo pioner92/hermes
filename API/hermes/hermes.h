@@ -198,6 +198,30 @@ class HERMES_EXPORT IAsciiStringWriter : public jsi::ICast {
   ~IAsciiStringWriter() = default;
 };
 
+/// Like IAsciiStringWriter, for UTF-16 code units: lets the caller convert
+/// text (e.g. from UTF-8) straight into the string's storage.
+class HERMES_EXPORT IUtf16StringWriter : public jsi::ICast {
+ public:
+  static constexpr jsi::UUID uuid{
+      0xba18ddb2,
+      0x6494,
+      0x4d3c,
+      0xb308,
+      0xb29502c2d009};
+
+  /// Fills exactly the requested number of UTF-16 code units at \p dst. Must
+  /// not call into the runtime. Returns false to reject the output.
+  using WriteFn = bool (*)(void *ctx, char16_t *dst) noexcept;
+
+  /// \return a string of \p length code units written in place by \p write.
+  /// Throws a JSError if \p write returns false or \p length is too large.
+  virtual jsi::String
+  createStringFromUtf16Writer(size_t length, void *ctx, WriteFn write) = 0;
+
+ protected:
+  ~IUtf16StringWriter() = default;
+};
+
 class HermesRuntime : public jsi::Runtime, public IHermes {
  public:
   /// Similar to jsi::Runtime, HermesRuntime is treated as an object, rather

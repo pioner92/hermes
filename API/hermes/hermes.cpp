@@ -196,6 +196,7 @@ namespace {
 class HermesRuntimeImpl final : public HermesRuntime,
                                 private IHermesTestHelpers,
                                 private IAsciiStringWriter,
+                                private IUtf16StringWriter,
                                 private InstallHermesFatalErrorHandler,
                                 private jsi::Instrumentation {
  public:
@@ -677,6 +678,10 @@ class HermesRuntimeImpl final : public HermesRuntime,
       size_t length,
       void *ctx,
       IAsciiStringWriter::WriteFn write) override;
+  jsi::String createStringFromUtf16Writer(
+      size_t length,
+      void *ctx,
+      IUtf16StringWriter::WriteFn write) override;
   std::string utf8(const jsi::String &) override;
 
   std::u16string utf16(const jsi::String &str) override;
@@ -1373,6 +1378,9 @@ jsi::ICast *HermesRuntimeImpl::castInterface(const jsi::UUID &interfaceUUID) {
   if (interfaceUUID == IAsciiStringWriter::uuid) {
     return static_cast<IAsciiStringWriter *>(this);
   }
+  if (interfaceUUID == IUtf16StringWriter::uuid) {
+    return static_cast<IUtf16StringWriter *>(this);
+  }
   return nullptr;
 }
 
@@ -2007,6 +2015,38 @@ jsi::String HermesRuntimeImpl::createStringFromAsciiWriter(
         "non-ASCII character in string");
   }
 #endif
+  return add<jsi::String>(*res);
+}
+
+jsi::String HermesRuntimeImpl::createStringFromUtf16Writer(
+    size_t length,
+    void *ctx,
+    IUtf16StringWriter::WriteFn write) {
+  if (length < 2) {
+    // 0/1-char strings come from the interned table in createEfficient.
+    char16_t buf[1];
+    if (length != 0 && !write(ctx, buf)) {
+      throw jsi::JSError(*this, "UTF-16 string writer failed");
+    }
+    return createStringFromUtf16(buf, length);
+  }
+  if (length > vm::StringPrimitive::MAX_STRING_LENGTH) {
+    throw jsi::JSError(*this, "String length exceeds limit");
+  }
+  vm::GCScope gcScope(runtime_);
+  auto res = vm::StringPrimitive::create(
+      runtime_, static_cast<uint32_t>(length), /* asciiNotUTF16 */ false);
+  checkStatus(res.getStatus());
+  char16_t *dst = res->getString()->castToUTF16PointerForWrite();
+  bool ok;
+  {
+    // The new cell is unrooted, so write must not allocate on the JS heap.
+    vm::NoAllocScope noAlloc(runtime_);
+    ok = write(ctx, dst);
+  }
+  if (!ok) {
+    throw jsi::JSError(*this, "UTF-16 string writer failed");
+  }
   return add<jsi::String>(*res);
 }
 
