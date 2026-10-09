@@ -195,6 +195,7 @@ class HermesRootAPI final : public IHermesRootAPI, public ISetFatalHandler {
 namespace {
 class HermesRuntimeImpl final : public HermesRuntime,
                                 private IHermesTestHelpers,
+                                private IAsciiStringWriter,
                                 private InstallHermesFatalErrorHandler,
                                 private jsi::Instrumentation {
  public:
@@ -672,6 +673,10 @@ class HermesRuntimeImpl final : public HermesRuntime,
   jsi::String createStringFromUtf8(const uint8_t *utf8, size_t length) override;
   jsi::String createStringFromUtf16(const char16_t *utf16, size_t length)
       override;
+  jsi::String createStringFromAsciiWriter(
+      size_t length,
+      void *ctx,
+      IAsciiStringWriter::WriteFn write) override;
   std::string utf8(const jsi::String &) override;
 
   std::u16string utf16(const jsi::String &str) override;
@@ -1365,6 +1370,9 @@ jsi::ICast *HermesRuntimeImpl::castInterface(const jsi::UUID &interfaceUUID) {
   if (interfaceUUID == IHermes::uuid) {
     return static_cast<IHermes *>(this);
   }
+  if (interfaceUUID == IAsciiStringWriter::uuid) {
+    return static_cast<IAsciiStringWriter *>(this);
+  }
   return nullptr;
 }
 
@@ -1959,6 +1967,47 @@ jsi::String HermesRuntimeImpl::createStringFromUtf16(
     size_t length) {
   vm::GCScope gcScope(runtime_);
   return add<jsi::String>(stringHVFromUtf16(utf16, length));
+}
+
+jsi::String HermesRuntimeImpl::createStringFromAsciiWriter(
+    size_t length,
+    void *ctx,
+    IAsciiStringWriter::WriteFn write) {
+  if (length < 2) {
+    // 0/1-char strings come from the interned table in createEfficient.
+    char buf[1];
+    if (length != 0 && !write(ctx, buf)) {
+      throw jsi::JSError(*this, "ASCII string writer failed");
+    }
+    return createStringFromAscii(buf, length);
+  }
+  if (length > vm::StringPrimitive::MAX_STRING_LENGTH) {
+    throw jsi::JSError(*this, "String length exceeds limit");
+  }
+  vm::GCScope gcScope(runtime_);
+  auto res = vm::StringPrimitive::create(
+      runtime_, static_cast<uint32_t>(length), /* asciiNotUTF16 */ true);
+  checkStatus(res.getStatus());
+  char *dst = res->getString()->castToASCIIPointerForWrite();
+  bool ok;
+  {
+    // The new cell is unrooted, so write must not allocate on the JS heap.
+    vm::NoAllocScope noAlloc(runtime_);
+    ok = write(ctx, dst);
+  }
+  if (!ok) {
+    // Keep the discarded string ASCII-valid.
+    std::fill_n(dst, length, '\0');
+    throw jsi::JSError(*this, "ASCII string writer failed");
+  }
+#ifndef NDEBUG
+  for (size_t i = 0; i < length; ++i) {
+    assert(
+        static_cast<unsigned char>(dst[i]) < 128 &&
+        "non-ASCII character in string");
+  }
+#endif
+  return add<jsi::String>(*res);
 }
 
 std::string HermesRuntimeImpl::utf8(const jsi::String &str) {

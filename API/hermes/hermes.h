@@ -172,6 +172,32 @@ class HERMES_EXPORT IHermesTestHelpers : public jsi::ICast {
   ~IHermesTestHelpers() = default;
 };
 
+/// Creates ASCII strings by letting the caller write the characters directly
+/// into the string's storage, avoiding an intermediate copy. Obtained through
+/// castInterface, so its absence can be detected at runtime. The layout and
+/// UUID are a contract with out-of-tree users: change the UUID on any change.
+class HERMES_EXPORT IAsciiStringWriter : public jsi::ICast {
+ public:
+  static constexpr jsi::UUID uuid{
+      0x691748a1,
+      0x86d1,
+      0x4d09,
+      0x9bf0,
+      0x9796b67c8e23};
+
+  /// Fills exactly the requested number of ASCII chars at \p dst. Must not
+  /// call into the runtime. Returns false to reject the output.
+  using WriteFn = bool (*)(void *ctx, char *dst) noexcept;
+
+  /// \return a string of \p length chars written in place by \p write.
+  /// Throws a JSError if \p write returns false or \p length is too large.
+  virtual jsi::String
+  createStringFromAsciiWriter(size_t length, void *ctx, WriteFn write) = 0;
+
+ protected:
+  ~IAsciiStringWriter() = default;
+};
+
 class HermesRuntime : public jsi::Runtime, public IHermes {
  public:
   /// Similar to jsi::Runtime, HermesRuntime is treated as an object, rather
